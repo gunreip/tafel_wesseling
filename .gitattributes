@@ -1,0 +1,28 @@
+* text=auto eol=lf
+
+# Normalize common text files
+*.php text
+*.js text
+*.ts text
+*.css text
+*.scss text
+*.html text
+*.blade.php text
+*.json text
+*.md text
+*.yml text
+*.yaml text
+*.neon text
+*.ini text
+*.toml text
+
+# Keep binaries untouched
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.svg text eol=lf
