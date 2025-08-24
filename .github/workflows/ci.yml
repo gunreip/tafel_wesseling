@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  php-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, intl, pdo_pgsql, dom, curl, gd
+          coverage: none
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache/files
+          key: composer-${{ runner.os }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare app key
+        run: |
+          cp -n .env.example .env || true
+          php artisan key:generate || true
+
+      - name: Pint (if present)
+        run: |
+          if [ -x vendor/bin/pint ]; then vendor/bin/pint --test; else echo "pint not installed - skipping"; fi
+
+      - name: Larastan (if present)
+        run: |
+          if [ -x vendor/bin/phpstan ]; then vendor/bin/phpstan analyse --no-progress --memory-limit=1G; else echo "phpstan not installed - skipping"; fi
+
+      - name: PHPUnit (if present)
+        run: |
+          if [ -x vendor/bin/phpunit ]; then vendor/bin/phpunit --no-coverage --testdox; else echo "phpunit not installed - skipping"; fi
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build assets
+        run: npm run build
