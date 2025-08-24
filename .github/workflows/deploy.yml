@@ -1,0 +1,145 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment name (for reference only)"
+        required: false
+        default: "production"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (Composer + Vite)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          extensions: mbstring, intl, pdo_pgsql
+          tools: composer:v2
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache/files
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
+
+      - name: Composer install (no-dev)
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install & Build (Vite)
+        run: |
+          if [ -f package.json ]; then
+            npm ci
+            npm run build
+          else
+            echo "No package.json -> skipping frontend build"
+          fi
+
+      - name: Create release tarball
+        run: |
+          tar -czf release.tgz                 --exclude='.git'                 --exclude='node_modules'                 --exclude='.github'                 --exclude='tests'                 --exclude='storage/logs/*'                 --exclude='storage/framework/sessions/*'                 .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release.tgz
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy (SSH)
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: .
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+
+      - name: Copy release to server
+        run: |
+          scp -o StrictHostKeyChecking=yes release.tgz "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/release-${GITHUB_SHA}.tgz"
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+
+      - name: Remote deploy steps
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<'EOSH'
+          set -euo pipefail
+          DEPLOY_PATH="${DEPLOY_PATH}"
+          SHA="${GITHUB_SHA}"
+
+          mkdir -p "$DEPLOY_PATH"
+          tar -xzf "/tmp/release-${SHA}.tgz" -C "$DEPLOY_PATH"
+
+          cd "$DEPLOY_PATH"
+
+          if command -v composer >/dev/null 2>&1; then
+            composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader
+          else
+            echo "Composer not found on server; please install composer or adjust the workflow." >&2
+            exit 1
+          fi
+
+          php artisan down || true
+          php artisan migrate --force || true
+          php artisan optimize:clear || true
+          php artisan config:cache || true
+          php artisan route:cache || true
+          php artisan view:cache || true
+          php artisan up || true
+
+          echo "✅ Deploy finished on $(hostname)"
+          EOSH
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          GITHUB_SHA: ${{ github.sha }}

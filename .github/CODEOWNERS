@@ -1,0 +1,5 @@
+# CODEOWNERS – automatische Reviewer-Zuordnung
+# Syntax: <pattern> <owner(s)>
+# Beispiel: app/**    @gunreip
+
+* @gunreip
