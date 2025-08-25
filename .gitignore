@@ -42,3 +42,6 @@ Thumbs.db
 *.swo
 *.tmp
 *.bak
+
+# Spatie backups
+/storage/app/laravel-backups/*
